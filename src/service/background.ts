@@ -9,7 +9,36 @@ type TabAds = {
   [tabId: number]: Ad[];
 };
 
+type BlockedAdRule = {
+  ruleId: number;
+  rule: chrome.declarativeNetRequest.MatchedRule;
+  requests: Set<string>; // Using Set to avoid duplicates (store hostnames)
+  count: number;
+}
+
 const tabAds: TabAds = {};
+const blockedRules: BlockedAdRule[] = []
+
+chrome.declarativeNetRequest.onRuleMatchedDebug.addListener((info) => {
+  console.log("Request blocked/matched:", info.request.url);
+  console.log("Matched Rule ID:", info.rule.ruleId);
+  if (blockedRules.some(r => r.ruleId === info.rule.ruleId)) {
+    const existingRule = blockedRules.find(r => r.ruleId === info.rule.ruleId);
+    if (existingRule && URL.canParse(info.request.url)) {
+      // get the hostname from the URL and add to the set of requests for this rule
+      const url = new URL(info.request.url).hostname;
+      existingRule.requests.add(url);
+      existingRule.count = existingRule.requests.size;
+    }
+  } else if (URL.canParse(info.request.url)) {
+    blockedRules.push({
+      ruleId: info.rule.ruleId,
+      rule: info.rule,
+      requests: new Set([new URL(info.request.url).hostname]),
+      count: 1
+    });
+  }
+});
 
 async function sendToActiveTab(message: any) {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -84,9 +113,14 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
-// listens from popup.tsx
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // listens from popup.tsx and sends detected ads for active tab
   if (message.type === "GET_ADS") {
     sendResponse(tabAds);
+  }
+
+  // listens from popup.tsx and sends blocked rules
+  if (message.type === "GET_BLOCKED_ADS_RULES") {
+    sendResponse(blockedRules);
   }
 });
